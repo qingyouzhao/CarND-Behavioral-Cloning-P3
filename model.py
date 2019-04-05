@@ -4,9 +4,15 @@ import cv2
 import numpy as np
 from keras.models import Sequential
 from keras.layers import Flatten, Dense, Lambda, Convolution2D, MaxPooling2D, Cropping2D
+from keras.applications.inception_v3 import InceptionV3
+from keras.models import Model
 from keras.applications.vgg16 import VGG16
+import matplotlib.pyplot as plt
 import os
 import psutil
+import zipfile
+import click
+
 
 def print_memory_usage():
     process = psutil.Process(os.getpid())
@@ -113,7 +119,14 @@ def image_test_model(X_train, y_train, save_path='model.h5'):
     model.save(save_path)
 
 def LeNet_model(X_train, y_train, save_path='model.h5', epochs=5):
+    """
 
+    :param X_train: Input training data, an array of 3 channel pictures
+    :param y_train: Input training data
+    :param save_path:
+    :param epochs:
+    :return:
+    """
     input_shape = X_train[0].shape
     print(input_shape)
     model = Sequential()
@@ -152,9 +165,7 @@ def add_pre_process_layers(model, input_shape):
 
 
 # training models from scratch:
-from keras.applications.inception_v3 import InceptionV3
-from keras.models import Model
-from keras import backend as K
+
 
 def pre_trained_inception(X_train, y_train, save_path='InceptionV3.h5', epochs=5):
     # create the base pre-trained model
@@ -183,13 +194,54 @@ def pre_trained_inception(X_train, y_train, save_path='InceptionV3.h5', epochs=5
 
     model.save(save_path)
 
+def nvidia_net(X_train, y_train, save_path='nvidia_custom.h5', epochs=5):
+    """
+    https://devblogs.nvidia.com/deep-learning-self-driving-cars/
+    :param X_train:
+    :param y_train:
+    :param save_path:
+    :param epochs:
+    :return:
+    """
+
+    model = Sequential()
+    model.add(Lambda(lambda x: x / 255.0 - 0.5, input_shape=X_train[0].shape))
+    model.add(Cropping2D(cropping=((70, 25), (0, 0))))
+    model.add(Convolution2D(24, 5, 5, subsample=(2, 2), activation='relu'))
+    model.add(Convolution2D(36, 5, 5, subsample=(2, 2), activation='relu'))
+    model.add(Convolution2D(48, 5, 5, subsample=(2, 2), activation='relu'))
+    model.add(Convolution2D(64, 3, 3, activation='relu'))
+    model.add(Convolution2D(64, 3, 3, activation='relu'))
+    model.add(Flatten())
+    model.add(Dense(100))
+    model.add(Dense(50))
+    model.add(Dense(10))
+    model.add(Dense(1))
+
+    print(model.summary())
+
+    model.compile(loss='mse',optimizer='adam')
+    history_object = model.fit(X_train, y_train, validation_split=0.2, shuffle=True, epochs=epochs)
+
+    ### plot the training and validation loss for each epoch
+    plt.plot(history_object.history['loss'])
+    plt.plot(history_object.history['val_loss'])
+    plt.title('model mean squared error loss')
+    plt.ylabel('mean squared error loss')
+    plt.xlabel('epoch')
+    plt.legend(['training set', 'validation set'], loc='upper right')
+    plt.show()
+
+    model.save(save_path)
+
+
 def main():
-    data_directory = os.path.join('driving_data','data')
-    X_train, y_train = read_training_data(data_directory, use_head=False,num_images=1000)
+    data_directory = os.path.join('driving_data','custom_data')
+    X_train, y_train = read_training_data(data_directory, use_head=False)
     # used to test pipeline
     # image_test_model(X_train,y_train)
 
-    pre_trained_inception(X_train,y_train)
+    nvidia_net(X_train,y_train)
 
 if __name__ == '__main__':
     main()
