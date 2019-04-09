@@ -12,6 +12,7 @@ import os
 import psutil
 import zipfile
 import click
+from math import ceil
 
 
 def print_memory_usage():
@@ -20,7 +21,10 @@ def print_memory_usage():
 
 
 def read_image(image_file):
-    return cv2.imread(image_file)
+    image = cv2.imread(image_file)
+    if image is None:
+        raise FileNotFoundError("{0} cannot be read as image".format(image_file))
+    return image
 
 def flip_image(image):
     """
@@ -50,21 +54,75 @@ def image_visualization(data_directory='/driving_data/data'):
     cv2.imshow('image', img)
     cv2.waitKey()
 
-def read_training_data(data_directory, use_head = False, num_images=-1):
+def read_training_data_log(data_directory, num_images=-1):
+    """
+    Read the csv file and generate full path for convenience
+    :param data_directory:
+    :param num_images:
+    :return:
+    """
+
     driving_log = read_driving_log(data_directory)
     if num_images != -1:
         driving_log = driving_log.head(num_images)
 
-    if use_head:
-        driving_log = driving_log.head()
+    # Create full paths in the data frame
+    convert_to_full = lambda x: os.path.join(data_directory, x.replace(' ',''))
+    driving_log['center_full'] = driving_log.loc[:,'center'].apply(convert_to_full)
+    driving_log['right_full'] = driving_log.loc[:, 'right'].apply(convert_to_full)
+    driving_log['left_full'] = driving_log.loc[:, 'left'].apply(convert_to_full)
 
+    return driving_log
 
+def data_frame_to_training_data(driving_log, augment_lr=False, steering_correction=0.2):
+    """
+    Given a data frame corresponding to image paths
+    todo(qingyouz): the data augmentation step could be done either on the fly or offline.
+    Return X_train and y_train
+    :param log_df:
+    :return:
+    """
+    # first read the images
+    num_images = len(driving_log)
+    num_image_per_line = 1
+    if augment_lr:
+        num_images += len(driving_log) * 2
+        num_image_per_line += 2
 
-    # Create full driving names
-    driving_log['center_full'] = driving_log.loc[:,'center'].apply(lambda x: os.path.join(data_directory, x))
-    driving_log['right_full'] = driving_log.loc[:, 'right'].apply(lambda x: os.path.join(data_directory, x))
-    driving_log['left_full'] = driving_log.loc[:, 'left'].apply(lambda x: os.path.join(data_directory, x))
+    # Add in flipped images
+    num_images *= 2
+    num_image_per_line *= 2
 
+    X_train = np.zeros([num_images] + list(read_image(driving_log['center_full'].values[0]).shape))
+    y_train = np.zeros(num_images)
+
+    for idx in range(driving_log.shape[0]):
+        cur_idx = num_image_per_line * idx
+        df_idx = driving_log.index[idx]
+
+        image_center = read_image(driving_log['center_full'][df_idx])
+        image_right = read_image(driving_log['right_full'][df_idx])
+        image_left = read_image(driving_log['left_full'][df_idx])
+
+        X_train[cur_idx] = image_center
+        y_train[cur_idx] = driving_log['steering'][df_idx]
+        X_train[cur_idx+1] = flip_image(image_center)
+        X_train[cur_idx+1] = -(driving_log['steering'][df_idx])
+        if augment_lr:
+            X_train[cur_idx+2] = image_left
+            y_train[cur_idx+2] = driving_log['steering'][df_idx] + steering_correction
+            X_train[cur_idx+3] = flip_image(image_left)
+            y_train[cur_idx+3] = (driving_log['steering'][df_idx] + steering_correction) * -1.0
+
+            X_train[cur_idx+4] = image_right
+            y_train[cur_idx+4] = (driving_log['steering'][df_idx] - steering_correction)
+            X_train[cur_idx+5] = flip_image(image_right)
+            y_train[cur_idx+5] = (driving_log['steering'][df_idx] - steering_correction) * -1.0
+
+    return X_train, y_train
+
+def read_training_data(data_directory, num_images=-1):
+    driving_log = read_training_data_log(data_directory, num_images=num_images)
     # read image into data frame
     driving_log['image_center'] = driving_log.loc[:,'center_full'].apply(read_image)
     # driving_log['image_left'] = driving_log.loc[:, 'left_full'].apply(read_image)
@@ -80,7 +138,6 @@ def read_training_data(data_directory, use_head = False, num_images=-1):
 
     print("Center has shape {0}".format(X_train['center'].shape))
     print("Center flipped has shape {0}".format(X_train['center_flipped'].shape))
-
 
     for idx in range(driving_log['image_center'].shape[-1]):
         if(idx%500==0):
@@ -104,6 +161,22 @@ def read_training_data(data_directory, use_head = False, num_images=-1):
     return X_train_combined, y_train_combined
 
 
+def training_data_generator(driving_log,num_images=-1, batch_size=32):
+    """
+    Use a genarator pattern to read images into memory instead of reading them into a chunk
+    :param data_directory:
+    :param num_images:
+    :return:
+    """
+    while 1:
+        sample_log = driving_log.sample(batch_size)
+        X_train, y_train = data_frame_to_training_data(sample_log, augment_lr=True)
+        yield X_train, y_train
+
+
+#
+# Models
+#
 
 def image_test_model(X_train, y_train, save_path='model.h5'):
 
@@ -194,7 +267,7 @@ def pre_trained_inception(X_train, y_train, save_path='InceptionV3.h5', epochs=5
 
     model.save(save_path)
 
-def nvidia_net(X_train, y_train, save_path='nvidia_custom.h5', epochs=5):
+def nvidia_net(input_shape):
     """
     https://devblogs.nvidia.com/deep-learning-self-driving-cars/
     :param X_train:
@@ -205,7 +278,7 @@ def nvidia_net(X_train, y_train, save_path='nvidia_custom.h5', epochs=5):
     """
 
     model = Sequential()
-    model.add(Lambda(lambda x: x / 255.0 - 0.5, input_shape=X_train[0].shape))
+    model.add(Lambda(lambda x: x / 255.0 - 0.5, input_shape=input_shape))
     model.add(Cropping2D(cropping=((70, 25), (0, 0))))
     model.add(Convolution2D(24, 5, 5, subsample=(2, 2), activation='relu'))
     model.add(Convolution2D(36, 5, 5, subsample=(2, 2), activation='relu'))
@@ -221,27 +294,46 @@ def nvidia_net(X_train, y_train, save_path='nvidia_custom.h5', epochs=5):
     print(model.summary())
 
     model.compile(loss='mse',optimizer='adam')
-    history_object = model.fit(X_train, y_train, validation_split=0.2, shuffle=True, epochs=epochs)
 
-    ### plot the training and validation loss for each epoch
-    plt.plot(history_object.history['loss'])
-    plt.plot(history_object.history['val_loss'])
-    plt.title('model mean squared error loss')
-    plt.ylabel('mean squared error loss')
-    plt.xlabel('epoch')
-    plt.legend(['training set', 'validation set'], loc='upper right')
-    plt.show()
+    return model
 
-    model.save(save_path)
+@click.command()
+@click.option('--model-save-path','-s')
+@click.option('--model')
+@click.option('--epochs','-e',type=int)
+def main(model_save_path="", model="", epochs=2):
+    data_directory = os.path.join('driving_data','data')
+    validation_directory = os.path.join('driving_data', 'custom_data')
 
-
-def main():
-    data_directory = os.path.join('driving_data','custom_data')
-    X_train, y_train = read_training_data(data_directory, use_head=False)
+    # read some sample training data for ease of processing
+    X_train, y_train = read_training_data(data_directory, num_images=10)
     # used to test pipeline
     # image_test_model(X_train,y_train)
 
-    nvidia_net(X_train,y_train)
+    driving_log = read_training_data_log(data_directory)
+    print("Using {0} pictures for training".format(len(driving_log)))
+    train_generator = training_data_generator(driving_log)
+
+    validation_log = read_training_data_log(validation_directory)
+    print("Using {0} pictures for validation".format(len(validation_log)))
+    validation_generator = training_data_generator(validation_log)
+
+    model = Sequential()
+    model = nvidia_net(input_shape=X_train[0].shape)
+    # history_object = model.fit(X_train, y_train, validation_split=0.2, shuffle=True, epochs=5)
+
+    from keras import backend as K
+    print(K.tensorflow_backend._get_available_gpus())
+
+    batch_size = 32
+    model.fit_generator(train_generator,
+                        steps_per_epoch=ceil(len(driving_log) * 6 / batch_size),
+                        validation_data=validation_generator,
+                        validation_steps=ceil(len(validation_log) * 6/batch_size),
+                        epochs=epochs, verbose=1)
+
+    model.save(model_save_path)
+
 
 if __name__ == '__main__':
     main()
