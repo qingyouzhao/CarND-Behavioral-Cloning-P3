@@ -74,6 +74,7 @@ def read_training_data_log(data_directory, num_images=-1):
 
     return driving_log
 
+
 def data_frame_to_training_data(driving_log, augment_lr=False, steering_correction=0.2):
     """
     Given a data frame corresponding to image paths
@@ -210,7 +211,6 @@ def LeNet_model(X_train, y_train, save_path='model.h5', epochs=5):
     model.add(MaxPooling2D())
     model.add(Convolution2D(filters=16,kernel_size=(5,5), activation='relu'))
     model.add(MaxPooling2D())
-
     model.add(Flatten())
     model.add(Dense(120))
     model.add(Dense(84))
