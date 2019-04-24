@@ -108,7 +108,15 @@ The final model architecture(function`nvidia_net` in `model.py`) consisted of a 
 
 To capture good driving behavior, I first recorded two laps on track one using center lane driving. Then recorded the vehicle recovering from the left side and right sides of the road back to center so that the vehicle would learn to respond to driving off different kinds of tracks. However the training data I first collected was not good enough because using keyboard input resulted in binary inputs of either 0 angle or max steering angle. 
 
-With time limit, I fall back to the project default data set but still used the data I collocted as validation.
+With time limit, I fall back to the project default data set but still used the data I collected as validation. An example is here
+
+![Example of center](.\examples\center_2016_12_01_13_33_07_936.jpg)
+
+![Example of left](.\examples\left_2019_04_07_18_13_15_260.jpg)
+
+![right_2016_12_01_13_43_02_568](.\examples\right_2016_12_01_13_43_02_568.jpg)
+
+
 
 To augment the data sat, I also flipped images and angles thinking that this would tackle the problem of the training data collected being all driving anti-clockwise. I also used the left and right camera image with and additional sterring angle of 0.2 to augment the training data available.
 
